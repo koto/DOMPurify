@@ -98,6 +98,7 @@ function createDOMPurify() {
       Text = window.Text,
       Comment = window.Comment,
       DOMParser = window.DOMParser,
+      TrustedTypes = window.TrustedTypes,
       _window$XMLHttpReques = window.XMLHttpRequest,
       XMLHttpRequest = _window$XMLHttpReques === undefined ? window.XMLHttpRequest : _window$XMLHttpReques,
       _window$encodeURI = window.encodeURI,
@@ -115,6 +116,20 @@ function createDOMPurify() {
     if (template.content && template.content.ownerDocument) {
       document = template.content.ownerDocument;
     }
+  }
+
+  var trustedTypePolicy = void 0;
+  var emptyHTML = '';
+
+  // Create no-op policy for internal use only.
+  if ((typeof TrustedTypes === 'undefined' ? 'undefined' : _typeof(TrustedTypes)) === 'object' && typeof TrustedTypes.createPolicy === 'function') {
+    var prefix = originalDocument.currentScript ? originalDocument.currentScript.src : '';
+    trustedTypePolicy = TrustedTypes.createPolicy(prefix + '#dompurify', function (policy) {
+      policy.createHTML = function (html$$1) {
+        return html$$1;
+      };
+    });
+    emptyHTML = trustedTypePolicy.createHTML('');
   }
 
   var _document = document,
@@ -332,7 +347,7 @@ function createDOMPurify() {
     try {
       node.parentNode.removeChild(node);
     } catch (err) {
-      node.outerHTML = '';
+      node.outerHTML = emptyHTML;
     }
   };
 
@@ -398,7 +413,7 @@ function createDOMPurify() {
           body = _doc.body;
 
       body.parentNode.removeChild(body.parentNode.firstElementChild);
-      body.outerHTML = dirty;
+      body.outerHTML = trustedTypePolicy ? trustedTypePolicy.createHTML(dirty) : dirty;
     }
 
     /* Work on whole document or just its body */
@@ -529,7 +544,8 @@ function createDOMPurify() {
       /* Keep content except for black-listed elements */
       if (KEEP_CONTENT && !FORBID_CONTENTS[tagName] && typeof currentNode.insertAdjacentHTML === 'function') {
         try {
-          currentNode.insertAdjacentHTML('AfterEnd', currentNode.innerHTML);
+          var htmlToInsert = currentNode.innerHTML;
+          currentNode.insertAdjacentHTML('AfterEnd', trustedTypePolicy ? trustedTypePolicy.createHTML(htmlToInsert) : htmlToInsert);
         } catch (err) {}
       }
       _forceRemove(currentNode);
@@ -811,7 +827,7 @@ function createDOMPurify() {
     } else {
       /* Exit directly if we have nothing to do */
       if (!RETURN_DOM && !WHOLE_DOCUMENT && dirty.indexOf('<') === -1) {
-        return dirty;
+        return trustedTypePolicy ? trustedTypePolicy.createHTML(dirty) : dirty;
       }
 
       /* Initialize the document to work on */
@@ -819,7 +835,7 @@ function createDOMPurify() {
 
       /* Check we have a DOM node from the data */
       if (!body) {
-        return RETURN_DOM ? null : '';
+        return RETURN_DOM ? null : emptyHTML;
       }
     }
 
@@ -878,7 +894,8 @@ function createDOMPurify() {
       return returnNode;
     }
 
-    return WHOLE_DOCUMENT ? body.outerHTML : body.innerHTML;
+    var serializedHTML = WHOLE_DOCUMENT ? body.outerHTML : body.innerHTML;
+    return trustedTypePolicy ? trustedTypePolicy.createHTML(serializedHTML) : serializedHTML;
   };
 
   /**

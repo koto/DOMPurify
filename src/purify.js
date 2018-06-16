@@ -42,6 +42,7 @@ function createDOMPurify(window = getGlobal()) {
     Text,
     Comment,
     DOMParser,
+    TrustedTypes,
     XMLHttpRequest = window.XMLHttpRequest,
     encodeURI = window.encodeURI,
   } = window;
@@ -57,6 +58,28 @@ function createDOMPurify(window = getGlobal()) {
     if (template.content && template.content.ownerDocument) {
       document = template.content.ownerDocument;
     }
+  }
+
+  let trustedTypePolicy;
+  let emptyHTML = '';
+
+  // Create no-op policy for internal use only.
+  if (
+    typeof TrustedTypes === 'object' &&
+    typeof TrustedTypes.createPolicy === 'function'
+  ) {
+    const prefix = originalDocument.currentScript
+      ? originalDocument.currentScript.src
+      : '';
+    trustedTypePolicy = TrustedTypes.createPolicy(
+      prefix + '#dompurify',
+      policy => {
+        policy.createHTML = function(html) {
+          return html;
+        };
+      }
+    );
+    emptyHTML = trustedTypePolicy.createHTML('');
   }
 
   const {
@@ -325,7 +348,7 @@ function createDOMPurify(window = getGlobal()) {
     try {
       node.parentNode.removeChild(node);
     } catch (err) {
-      node.outerHTML = '';
+      node.outerHTML = emptyHTML;
     }
   };
 
@@ -389,7 +412,9 @@ function createDOMPurify(window = getGlobal()) {
       doc = implementation.createHTMLDocument('');
       const { body } = doc;
       body.parentNode.removeChild(body.parentNode.firstElementChild);
-      body.outerHTML = dirty;
+      body.outerHTML = trustedTypePolicy
+        ? trustedTypePolicy.createHTML(dirty)
+        : dirty;
     }
 
     /* Work on whole document or just its body */
@@ -546,7 +571,13 @@ function createDOMPurify(window = getGlobal()) {
         typeof currentNode.insertAdjacentHTML === 'function'
       ) {
         try {
-          currentNode.insertAdjacentHTML('AfterEnd', currentNode.innerHTML);
+          const htmlToInsert = currentNode.innerHTML;
+          currentNode.insertAdjacentHTML(
+            'AfterEnd',
+            trustedTypePolicy
+              ? trustedTypePolicy.createHTML(htmlToInsert)
+              : htmlToInsert
+          );
         } catch (err) {}
       }
       _forceRemove(currentNode);
@@ -852,7 +883,7 @@ function createDOMPurify(window = getGlobal()) {
     } else {
       /* Exit directly if we have nothing to do */
       if (!RETURN_DOM && !WHOLE_DOCUMENT && dirty.indexOf('<') === -1) {
-        return dirty;
+        return trustedTypePolicy ? trustedTypePolicy.createHTML(dirty) : dirty;
       }
 
       /* Initialize the document to work on */
@@ -860,7 +891,7 @@ function createDOMPurify(window = getGlobal()) {
 
       /* Check we have a DOM node from the data */
       if (!body) {
-        return RETURN_DOM ? null : '';
+        return RETURN_DOM ? null : emptyHTML;
       }
     }
 
@@ -919,7 +950,10 @@ function createDOMPurify(window = getGlobal()) {
       return returnNode;
     }
 
-    return WHOLE_DOCUMENT ? body.outerHTML : body.innerHTML;
+    const serializedHTML = WHOLE_DOCUMENT ? body.outerHTML : body.innerHTML;
+    return trustedTypePolicy
+      ? trustedTypePolicy.createHTML(serializedHTML)
+      : serializedHTML;
   };
 
   /**
