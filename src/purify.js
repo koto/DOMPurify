@@ -75,10 +75,10 @@ function createDOMPurify(window = getGlobal()) {
     typeof TrustedTypes === 'object' &&
     typeof TrustedTypes.createPolicy === 'function'
   ) {
-    const prefix = originalDocument.currentScript
-      ? originalDocument.currentScript.src
+    const suffix = originalDocument.currentScript
+      ? originalDocument.currentScript.dataset.ttPolicySuffix
       : '';
-    trustedTypePolicy = TrustedTypes.createPolicy(prefix + '#dompurify', {
+    trustedTypePolicy = TrustedTypes.createPolicy('dompurify#' + suffix, {
       createHTML(html) {
         return html;
       },

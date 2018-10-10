@@ -168,8 +168,8 @@ function createDOMPurify() {
 
   // Create no-op policy for internal use only.
   if ((typeof TrustedTypes === 'undefined' ? 'undefined' : _typeof(TrustedTypes)) === 'object' && typeof TrustedTypes.createPolicy === 'function') {
-    var prefix = originalDocument.currentScript ? originalDocument.currentScript.src : '';
-    trustedTypePolicy = TrustedTypes.createPolicy(prefix + '#dompurify', {
+    var suffix = originalDocument.currentScript ? originalDocument.currentScript.dataset.ttPolicySuffix : '';
+    trustedTypePolicy = TrustedTypes.createPolicy('dompurify#' + suffix, {
       createHTML: function createHTML(html$$1) {
         return html$$1;
       }
