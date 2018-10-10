@@ -78,14 +78,11 @@ function createDOMPurify(window = getGlobal()) {
     const prefix = originalDocument.currentScript
       ? originalDocument.currentScript.src
       : '';
-    trustedTypePolicy = TrustedTypes.createPolicy(
-      prefix + '#dompurify',
-      policy => {
-        policy.createHTML = function(html) {
-          return html;
-        };
-      }
-    );
+    trustedTypePolicy = TrustedTypes.createPolicy(prefix + '#dompurify', {
+      createHTML(html) {
+        return html;
+      },
+    });
     emptyHTML = trustedTypePolicy.createHTML('');
   }
 
