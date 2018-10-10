@@ -115,6 +115,12 @@ module.exports = function(DOMPurify, window, tests, xssTests) {
       assert.equal( DOMPurify.sanitize( '<a>123<b>456</b></a>', {RETURN_DOM: true, WHOLE_DOCUMENT: true}).outerHTML, "<html><head></head><body><a>123<b>456</b></a></body></html>" );
       assert.equal( DOMPurify.sanitize( '<a>123<b>456<script>alert(1)<\/script></b></a>', {RETURN_DOM: true, WHOLE_DOCUMENT: true}).outerHTML, "<html><head></head><body><a>123<b>456</b></a></body></html>" );
       assert.equal( DOMPurify.sanitize( '123', {RETURN_DOM: true}).outerHTML, "<body>123</body>" );
+      // Attribute namespaces should be correctly set.
+      var svg = DOMPurify.sanitize( '<svg><g><image xlink:href="foo.svg"></image></g></svg>', {RETURN_DOM: true});
+      var image = svg.querySelector('image');
+      var attr = image.getAttributeNode('xlink:href');
+      assert.equal( attr.namespaceURI, 'http://www.w3.org/1999/xlink' );
+      assert.equal( attr.value, 'foo.svg' );
   });
   QUnit.test( 'Config-Flag tests: RETURN_DOM_IMPORT', function(assert) {
       //RETURN_DOM_IMPORT
@@ -137,6 +143,14 @@ module.exports = function(DOMPurify, window, tests, xssTests) {
       assert.equal(fragment.nodeType, 11);
       assert.notEqual(fragment.ownerDocument, document);
       assert.equal(fragment.firstChild && fragment.firstChild.nodeValue, 'foo');
+  });
+  QUnit.test( 'Config-Flag tests: IN_PLACE', function(assert) {
+      //IN_PLACE
+      var dirty = document.createElement('a');
+      dirty.setAttribute('href', 'javascript:alert(1)');
+      var clean = DOMPurify.sanitize( dirty, {IN_PLACE: true} );
+      assert.equal(dirty, clean); // should return the input node
+      assert.equal(dirty.href, ''); // should still sanitize
   });
   QUnit.test( 'Config-Flag tests: FORBID_TAGS', function(assert) {
       //FORBID_TAGS
@@ -391,7 +405,7 @@ module.exports = function(DOMPurify, window, tests, xssTests) {
       var clean = DOMPurify.sanitize(document.createElement('td'));
       assert.equal(clean, "<td></td>");
   } );
-  QUnit.test( 'DOMPurify should deliver acurate results when sanitizing nodes 2', function (assert) {
+  QUnit.test( 'DOMPurify should deliver accurate results when sanitizing nodes 2', function (assert) {
       var clean = DOMPurify.sanitize(document.createElement('td'), {RETURN_DOM: true});
       assert.equal(clean.outerHTML, "<body><td></td></body>");
   } );
@@ -417,6 +431,10 @@ module.exports = function(DOMPurify, window, tests, xssTests) {
   QUnit.test( 'FORCE_BODY needs to push some elements to document.body', function (assert) {
       var clean = DOMPurify.sanitize(' AAAAA', {FORCE_BODY: true});
       assert.equal(clean, " AAAAA");
+  } );
+  QUnit.test( 'Lack of FORCE_BODY still preserves leading whitespace', function (assert) {
+      var clean = DOMPurify.sanitize(' <b>AAAAA</b>', {FORCE_BODY: false});
+      assert.equal(clean, " <b>AAAAA</b>");
   } );
   QUnit.test( 'Lack of FORCE_BODY needs to push some elements to document.head', function (assert) {
       var clean = DOMPurify.sanitize('<style>123</style>', {FORCE_BODY: false});
@@ -457,7 +475,6 @@ module.exports = function(DOMPurify, window, tests, xssTests) {
           '<svg keep="me"></svg>', "<svg xmlns=\"http://www.w3.org/2000/svg\" keep=\"me\" />"
       ] );
   });
-
   QUnit.test( 'Config-Flag tests: ALLOWED_URI_REGEXP', function(assert) {
       var tests = [
           {
@@ -483,4 +500,8 @@ module.exports = function(DOMPurify, window, tests, xssTests) {
         assert.equal( str, test.expected );
       });
   });
+  QUnit.test( 'Avoid freeze when using tables and ALLOW_TAGS', function (assert) {
+      var clean = DOMPurify.sanitize('<table><tr><td></td></tr></table>', {ALLOW_TAGS: ['table', 'tr', 'td']});
+      assert.equal(clean, '<table><tbody><tr><td></td></tr></tbody></table>');
+  } );
 };

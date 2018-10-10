@@ -3,7 +3,16 @@ import * as ATTRS from './attrs';
 import { addToSet, clone } from './utils';
 import * as EXPRESSIONS from './regexp';
 
+let { apply } = typeof Reflect !== 'undefined' && Reflect;
+const { slice: arraySlice } = Array.prototype;
+const { freeze } = Object;
 const getGlobal = () => (typeof window === 'undefined' ? null : window);
+
+if (!apply) {
+  apply = function(fun, thisValue, args) {
+    return fun.apply(thisValue, args);
+  };
+}
 
 function createDOMPurify(window = getGlobal()) {
   const DOMPurify = root => createDOMPurify(root);
@@ -29,7 +38,8 @@ function createDOMPurify(window = getGlobal()) {
   }
 
   const originalDocument = window.document;
-  let useDOMParser = false; // See comment below
+  let useDOMParser = false;
+  let removeTitle = false;
 
   let { document } = window;
   const {
@@ -184,6 +194,10 @@ function createDOMPurify(window = getGlobal()) {
   /* Keep element content when removing element? */
   let KEEP_CONTENT = true;
 
+  /* If a `Node` is passed to sanitize(), then performs sanitization in-place instead
+   * of importing it into a new Document and returning a sanitized copy */
+  let IN_PLACE = false;
+
   /* Allow usage of profiles like html, svg and mathMl */
   let USE_PROFILES = {};
 
@@ -241,7 +255,7 @@ function createDOMPurify(window = getGlobal()) {
   // eslint-disable-next-line complexity
   const _parseConfig = function(cfg) {
     /* Shield configuration object from tampering */
-    if (typeof cfg !== 'object') {
+    if (!cfg || typeof cfg !== 'object') {
       cfg = {};
     }
     /* Set configuration parameters */
@@ -268,6 +282,7 @@ function createDOMPurify(window = getGlobal()) {
     FORCE_BODY = cfg.FORCE_BODY || false; // Default false
     SANITIZE_DOM = cfg.SANITIZE_DOM !== false; // Default true
     KEEP_CONTENT = cfg.KEEP_CONTENT !== false; // Default true
+    IN_PLACE = cfg.IN_PLACE || false; // Default false
 
     IS_ALLOWED_URI = cfg.ALLOWED_URI_REGEXP || IS_ALLOWED_URI;
 
@@ -331,10 +346,15 @@ function createDOMPurify(window = getGlobal()) {
       addToSet(ALLOWED_TAGS, ['html', 'head', 'body']);
     }
 
+    /* Add tbody to ALLOWED_TAGS in case tables are permitted, see #286 */
+    if (ALLOWED_TAGS.table) {
+      addToSet(ALLOWED_TAGS, ['tbody']);
+    }
+
     // Prevent further manipulation of configuration.
     // Not available in IE8, Safari 5, etc.
-    if (Object && 'freeze' in Object) {
-      Object.freeze(cfg);
+    if (freeze) {
+      freeze(cfg);
     }
 
     CONFIG = cfg;
@@ -384,9 +404,17 @@ function createDOMPurify(window = getGlobal()) {
   const _initDocument = function(dirty) {
     /* Create a HTML document */
     let doc;
+    let leadingWhitespace;
 
     if (FORCE_BODY) {
       dirty = '<remove></remove>' + dirty;
+    } else {
+      /* If FORCE_BODY isn't used, leading whitespace needs to be preserved manually */
+      const matches = dirty.match(/^[\s]+/);
+      leadingWhitespace = matches && matches[0];
+      if (leadingWhitespace) {
+        dirty = dirty.slice(leadingWhitespace.length);
+      }
     }
 
     /* Use DOMParser to workaround Firefox bug (see comment below) */
@@ -394,6 +422,11 @@ function createDOMPurify(window = getGlobal()) {
       try {
         doc = new DOMParser().parseFromString(dirty, 'text/html');
       } catch (err) {}
+    }
+
+    /* Remove title to fix a mXSS bug in older MS Edge */
+    if (removeTitle) {
+      addToSet(FORBID_TAGS, ['title']);
     }
 
     /* Otherwise use createHTMLDocument, because DOMParser is unsafe in
@@ -407,6 +440,13 @@ function createDOMPurify(window = getGlobal()) {
         : dirty;
     }
 
+    if (leadingWhitespace) {
+      doc.body.insertBefore(
+        document.createTextNode(leadingWhitespace),
+        doc.body.childNodes[0] || null
+      );
+    }
+
     /* Work on whole document or just its body */
     return getElementsByTagName.call(doc, WHOLE_DOCUMENT ? 'html' : 'body')[0];
   };
@@ -417,6 +457,9 @@ function createDOMPurify(window = getGlobal()) {
   // not be safe if used in a document.write context later.
   //
   // So we feature detect the Firefox bug and use the DOMParser if necessary.
+  //
+  // MS Edge, in older versions, is affected by an mXSS behavior. The second
+  // check tests for the behavior and fixes it if necessary.
   if (DOMPurify.isSupported) {
     (function() {
       try {
@@ -425,6 +468,14 @@ function createDOMPurify(window = getGlobal()) {
         );
         if (doc.querySelector('svg img')) {
           useDOMParser = true;
+        }
+      } catch (err) {}
+    })();
+    (function() {
+      try {
+        const doc = _initDocument('<x/><title>&lt;/title&gt;&lt;img&gt;');
+        if (doc.querySelector('title').innerHTML.match(/<\/title/)) {
+          removeTitle = true;
         }
       } catch (err) {}
     })();
@@ -591,6 +642,77 @@ function createDOMPurify(window = getGlobal()) {
   };
 
   /**
+   * _isValidAttribute
+   *
+   * @param  {string} lcTag Lowercase tag name of containing element.
+   * @param  {string} lcName Lowercase attribute name.
+   * @param  {string} value Attribute value.
+   * @return {Boolean} Returns true if `value` is valid, otherwise false.
+   */
+  const _isValidAttribute = function(lcTag, lcName, value) {
+    /* Make sure attribute cannot clobber */
+    if (
+      SANITIZE_DOM &&
+      (lcName === 'id' || lcName === 'name') &&
+      (value in document || value in formElement)
+    ) {
+      return false;
+    }
+
+    /* Sanitize attribute content to be template-safe */
+    if (SAFE_FOR_TEMPLATES) {
+      value = value.replace(MUSTACHE_EXPR, ' ');
+      value = value.replace(ERB_EXPR, ' ');
+    }
+
+    /* Allow valid data-* attributes: At least one character after "-"
+        (https://html.spec.whatwg.org/multipage/dom.html#embedding-custom-non-visible-data-with-the-data-*-attributes)
+        XML-compatible (https://html.spec.whatwg.org/multipage/infrastructure.html#xml-compatible and http://www.w3.org/TR/xml/#d0e804)
+        We don't need to check the value; it's always URI safe. */
+    if (ALLOW_DATA_ATTR && DATA_ATTR.test(lcName)) {
+      // This attribute is safe
+    } else if (ALLOW_ARIA_ATTR && ARIA_ATTR.test(lcName)) {
+      // This attribute is safe
+      /* Otherwise, check the name is permitted */
+    } else if (!ALLOWED_ATTR[lcName] || FORBID_ATTR[lcName]) {
+      return false;
+
+      /* Check value is safe. First, is attr inert? If so, is safe */
+    } else if (URI_SAFE_ATTRIBUTES[lcName]) {
+      // This attribute is safe
+      /* Check no script, data or unknown possibly unsafe URI
+        unless we know URI values are safe for that attribute */
+    } else if (IS_ALLOWED_URI.test(value.replace(ATTR_WHITESPACE, ''))) {
+      // This attribute is safe
+      /* Keep image data URIs alive if src/xlink:href is allowed */
+      /* Further prevent gadget XSS for dynamically built script tags */
+    } else if (
+      (lcName === 'src' || lcName === 'xlink:href') &&
+      lcTag !== 'script' &&
+      value.indexOf('data:') === 0 &&
+      DATA_URI_TAGS[lcTag]
+    ) {
+      // This attribute is safe
+      /* Allow unknown protocols: This provides support for links that
+        are handled by protocol handlers which may be unknown ahead of
+        time, e.g. fb:, spotify: */
+    } else if (
+      ALLOW_UNKNOWN_PROTOCOLS &&
+      !IS_SCRIPT_OR_DATA.test(value.replace(ATTR_WHITESPACE, ''))
+    ) {
+      // This attribute is safe
+      /* Check for binary attributes */
+      // eslint-disable-next-line no-negated-condition
+    } else if (!value) {
+      // Binary attributes are safe at this point
+      /* Anything else, presume unsafe, do not add it back */
+    } else {
+      return false;
+    }
+    return true;
+  };
+
+  /**
    * _sanitizeAttributes
    *
    * @protect attributes
@@ -598,8 +720,7 @@ function createDOMPurify(window = getGlobal()) {
    * @protect removeAttribute
    * @protect setAttribute
    *
-   * @param   node to sanitize
-   * @return  void
+   * @param  {Node} node to sanitize
    */
   // eslint-disable-next-line complexity
   const _sanitizeAttributes = function(currentNode) {
@@ -629,7 +750,7 @@ function createDOMPurify(window = getGlobal()) {
     /* Go backwards over all attributes; safely remove bad ones */
     while (l--) {
       attr = attributes[l];
-      const { name } = attr;
+      const { name, namespaceURI } = attr;
       value = attr.value.trim();
       lcName = name.toLowerCase();
 
@@ -650,7 +771,7 @@ function createDOMPurify(window = getGlobal()) {
         attributes.id
       ) {
         idAttr = attributes.id;
-        attributes = Array.prototype.slice.apply(attributes);
+        attributes = apply(arraySlice, attributes, []);
         _removeAttribute('id', currentNode);
         _removeAttribute(name, currentNode);
         if (attributes.indexOf(idAttr) > l) {
@@ -680,67 +801,20 @@ function createDOMPurify(window = getGlobal()) {
         continue;
       }
 
-      /* Make sure attribute cannot clobber */
-      if (
-        SANITIZE_DOM &&
-        (lcName === 'id' || lcName === 'name') &&
-        (value in document || value in formElement)
-      ) {
-        continue;
-      }
-
-      /* Sanitize attribute content to be template-safe */
-      if (SAFE_FOR_TEMPLATES) {
-        value = value.replace(MUSTACHE_EXPR, ' ');
-        value = value.replace(ERB_EXPR, ' ');
-      }
-
-      /* Allow valid data-* attributes: At least one character after "-"
-         (https://html.spec.whatwg.org/multipage/dom.html#embedding-custom-non-visible-data-with-the-data-*-attributes)
-         XML-compatible (https://html.spec.whatwg.org/multipage/infrastructure.html#xml-compatible and http://www.w3.org/TR/xml/#d0e804)
-         We don't need to check the value; it's always URI safe. */
-      if (ALLOW_DATA_ATTR && DATA_ATTR.test(lcName)) {
-        // This attribute is safe
-      } else if (ALLOW_ARIA_ATTR && ARIA_ATTR.test(lcName)) {
-        // This attribute is safe
-        /* Otherwise, check the name is permitted */
-      } else if (!ALLOWED_ATTR[lcName] || FORBID_ATTR[lcName]) {
-        continue;
-
-        /* Check value is safe. First, is attr inert? If so, is safe */
-      } else if (URI_SAFE_ATTRIBUTES[lcName]) {
-        // This attribute is safe
-        /* Check no script, data or unknown possibly unsafe URI
-         unless we know URI values are safe for that attribute */
-      } else if (IS_ALLOWED_URI.test(value.replace(ATTR_WHITESPACE, ''))) {
-        // This attribute is safe
-        /* Keep image data URIs alive if src/xlink:href is allowed */
-      } else if (
-        (lcName === 'src' || lcName === 'xlink:href') &&
-        value.indexOf('data:') === 0 &&
-        DATA_URI_TAGS[currentNode.nodeName.toLowerCase()]
-      ) {
-        // This attribute is safe
-        /* Allow unknown protocols: This provides support for links that
-         are handled by protocol handlers which may be unknown ahead of
-         time, e.g. fb:, spotify: */
-      } else if (
-        ALLOW_UNKNOWN_PROTOCOLS &&
-        !IS_SCRIPT_OR_DATA.test(value.replace(ATTR_WHITESPACE, ''))
-      ) {
-        // This attribute is safe
-        /* Check for binary attributes */
-        // eslint-disable-next-line no-negated-condition
-      } else if (!value) {
-        // Binary attributes are safe at this point
-        /* Anything else, presume unsafe, do not add it back */
-      } else {
+      /* Is `value` valid for this attribute? */
+      const lcTag = currentNode.nodeName.toLowerCase();
+      if (!_isValidAttribute(lcTag, lcName, value)) {
         continue;
       }
 
       /* Handle invalid data-* attribute set by try-catching it */
       try {
-        currentNode.setAttribute(name, value);
+        if (namespaceURI) {
+          currentNode.setAttributeNS(namespaceURI, name, value);
+        } else {
+          /* Fallback to setAttribute() for browser-unrecognized namespaces e.g. "x-schema". */
+          currentNode.setAttribute(name, value);
+        }
         DOMPurify.removed.pop();
       } catch (err) {}
     }
@@ -841,7 +915,9 @@ function createDOMPurify(window = getGlobal()) {
     /* Clean up removed elements */
     DOMPurify.removed = [];
 
-    if (dirty instanceof Node) {
+    if (IN_PLACE) {
+      /* No special handling necessary for in-place sanitization */
+    } else if (dirty instanceof Node) {
       /* If dirty is a DOM element, append to an empty document to avoid
          elements being stripped by the parser */
       body = _initDocument('<!-->');
@@ -868,12 +944,12 @@ function createDOMPurify(window = getGlobal()) {
     }
 
     /* Remove first element node (ours) if FORCE_BODY is set */
-    if (FORCE_BODY) {
+    if (body && FORCE_BODY) {
       _forceRemove(body.firstChild);
     }
 
     /* Get node iterator */
-    const nodeIterator = _createIterator(body);
+    const nodeIterator = _createIterator(IN_PLACE ? dirty : body);
 
     /* Now start iterating over the created document */
     while ((currentNode = nodeIterator.nextNode())) {
@@ -896,6 +972,11 @@ function createDOMPurify(window = getGlobal()) {
       _sanitizeAttributes(currentNode);
 
       oldNode = currentNode;
+    }
+
+    /* If we sanitized `dirty` in-place, return it. */
+    if (IN_PLACE) {
+      return dirty;
     }
 
     /* Return sanitized string or DOM */
@@ -947,6 +1028,26 @@ function createDOMPurify(window = getGlobal()) {
   DOMPurify.clearConfig = function() {
     CONFIG = null;
     SET_CONFIG = false;
+  };
+
+  /**
+   * Public method to check if an attribute value is valid.
+   * Uses last set config, if any. Otherwise, uses config defaults.
+   * isValidAttribute
+   *
+   * @param  {string} tag Tag name of containing element.
+   * @param  {string} attr Attribute name.
+   * @param  {string} value Attribute value.
+   * @return {Boolean} Returns true if `value` is valid. Otherwise, returns false.
+   */
+  DOMPurify.isValidAttribute = function(tag, attr, value) {
+    /* Initialize shared config vars if necessary. */
+    if (!CONFIG) {
+      _parseConfig({});
+    }
+    const lcTag = tag.toLowerCase();
+    const lcName = attr.toLowerCase();
+    return _isValidAttribute(lcTag, lcName, value);
   };
 
   /**

@@ -1,10 +1,12 @@
-# DOMPurify [![Bower version](https://badge.fury.io/bo/dompurify.svg)](http://badge.fury.io/bo/dompurify) · [![npm version](https://badge.fury.io/js/dompurify.svg)](http://badge.fury.io/js/dompurify) · [![Build Status](https://travis-ci.org/cure53/DOMPurify.svg)](https://travis-ci.org/cure53/DOMPurify) · [![Downloads](https://img.shields.io/npm/dm/dompurify.svg)](https://www.npmjs.com/package/dompurify)
+# DOMPurify
+
+[![Bower version](https://badge.fury.io/bo/dompurify.svg)](http://badge.fury.io/bo/dompurify) · [![npm version](https://badge.fury.io/js/dompurify.svg)](http://badge.fury.io/js/dompurify) · [![Build Status](https://travis-ci.org/cure53/DOMPurify.svg)](https://travis-ci.org/cure53/DOMPurify) · [![Downloads](https://img.shields.io/npm/dm/dompurify.svg)](https://www.npmjs.com/package/dompurify) · [![gzip size](http://img.badgesize.io/https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js?compression=gzip)](https://cdn.jsdelivr.net/npm/dompurify/dist/purify.min.js) · [![install size](https://badgen.net/packagephobia/install/dompurify)](https://packagephobia.now.sh/result?p=dompurify)
 
 [![NPM](https://nodei.co/npm/dompurify.png)](https://nodei.co/npm/dompurify/)
 
 DOMPurify is a DOM-only, super-fast, uber-tolerant XSS sanitizer for HTML, MathML and SVG.
 
-It's also very simple to use and get started with. DOMPurify was [started in February 2014](https://github.com/cure53/DOMPurify/commit/a630922616927373485e0e787ab19e73e3691b2b) and, meanwhile, has reached version 1.0.5.
+It's also very simple to use and get started with. DOMPurify was [started in February 2014](https://github.com/cure53/DOMPurify/commit/a630922616927373485e0e787ab19e73e3691b2b) and, meanwhile, has reached version 1.0.8.
 
 DOMPurify is written in JavaScript and works in all modern browsers (Safari, Opera (15+), Internet Explorer (10+), Edge, Firefox and Chrome - as well as almost anything else using Blink or WebKit). It doesn't break on MSIE6 or other legacy browsers. It either uses [a fall-back](#what-about-older-browsers-like-msie8) or simply does nothing.
 
@@ -182,6 +184,11 @@ var clean = DOMPurify.sanitize(dirty, {KEEP_CONTENT: false});
 
 // glue elements like style, script or others to document.body and prevent unintuitive browser behavior in several edge-cases (default is false)
 var clean = DOMPurify.sanitize(dirty, {FORCE_BODY: true});
+
+// use the IN_PLACE mode to sanitize a node "in place", which is much faster depending on how you use DOMpurify
+var dirty = document.createElement('a');
+dirty.setAttribute('href', 'javascript:alert(1)');
+var clean = DOMPurify.sanitize(dirty, {IN_PLACE: true}); // see https://github.com/cure53/DOMPurify/issues/288 for more info
 ```
 There is even [more examples here](https://github.com/cure53/DOMPurify/tree/master/demos#what-is-this), showing how you can run, customize and configure DOMPurify to fit your needs.
 
